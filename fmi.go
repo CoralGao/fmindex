@@ -13,7 +13,6 @@ import (
 	// "flag"
 	"log"
 	// "bufio"
-	"path"
 	// "runtime"
 )
 
@@ -24,26 +23,14 @@ var Debug bool
 //-----------------------------------------------------------------------------
 var SEQ []byte
 
-/*
-type List struct {
-	data []int
-}
-SA = new(List)
-OCC = make([]List, len(SYMBOLS))
-type BWT struct {
-	data []byte
-}
-*/
 type Index struct{
 	SA []int 						// suffix array
 	C map[byte]int  				// count table
 	OCC map[byte][]int 			// occurence table
-
 	END_POS int 					// position of "$" in the text
 	SYMBOLS []int  				// sorted symbols
 	EP map[byte]int 				// ending row/position of each symbol
 
-	LEN int
 	// un-exported variables
 	bwt []byte
 	freq map[byte]int  // Frequency of each symbol
@@ -83,7 +70,7 @@ func (I *Index) BuildIndex() {
 	I.C = make(map[byte]int)
 	I.OCC = make(map[byte][]int)
 	I.EP = make(map[byte]int)
-	I.LEN = len(SEQ)
+
 	for c := range I.freq {
 		I.SYMBOLS = append(I.SYMBOLS, int(c))
 		I.OCC[c] = make([]int, len(SEQ))
@@ -108,33 +95,18 @@ func (I *Index) BuildIndex() {
 	delete(I.OCC, '$')
 	delete(I.C, '$')
 }
-//-----------------------------------------------------------------------------
-func _save(thing interface{}, filename string, error_message string) {
-	var out bytes.Buffer
-	enc := gob.NewEncoder(&out)
-	err := enc.Encode(thing)
-	if err != nil {
-		log.Fatal(error_message)
-	}
-	fmt.Println("save", filename)
-	ioutil.WriteFile(filename, out.Bytes(), 0600)
-}
 
 //-----------------------------------------------------------------------------
 func (I *Index) Save(file string) {
-	// save(I, file+".fm", "Fail to save fm index")
-	dir := file + ".index"
-	os.Mkdir(dir, 0777)
-
-	for symb := range I.OCC {
-		_save(I.OCC[symb], path.Join(dir, "occ." + string(symb)),"Fail to save to occ."+string(symb))
+	// Encode the struct Index y using Gob, then store it into "CompressIndex.dat"
+	var fout bytes.Buffer
+	enc := gob.NewEncoder(&fout)
+	err := enc.Encode(I)
+	if err != nil {
+	  log.Fatal("Save index; encode error:", err)
 	}
-	_save(I.SA, path.Join(dir,"sa"), "Fail to save suffix array")
-	_save(I.C, path.Join(dir,"c"), "Fail to save count")
-	_save(I.END_POS, path.Join(dir,"end_pos"), "Fail to save end_pos")
-	_save(I.SYMBOLS, path.Join(dir,"symbols"), "Fail to save symbols")
-	_save(I.EP, path.Join(dir,"ep"), "Fail to save ep")
-	_save(I.LEN, path.Join(dir,"len"), "Fail to save len")
+	ioutil.WriteFile(file, fout.Bytes(), 0600)
+	fmt.Println("Save index to", file)
 }
 
 //-----------------------------------------------------------------------------
@@ -170,6 +142,23 @@ func Search(I *Index, pattern []byte) []int {
 }
 
 //-----------------------------------------------------------------------------
+// return a length-l-substring of the text ending at position SA[r]-1
+// terminate if reaches beyond the first index.
+//-----------------------------------------------------------------------------
+func (I *Index) r_substr(r int, l int) []byte {
+	var s = make([]byte, l)
+	var i int
+	for i = l - 1; (i >= 0) && (r != I.END_POS); i-- {
+		s[i] = I.bwt[r]
+		r = (I.C[I.bwt[r]] + I.OCC[I.bwt[r]][r]) - 1 // substract 1 because index starts from 0
+	}
+	if i < 0 {
+		return s
+	}
+	return s[i+1:]
+}
+
+//-----------------------------------------------------------------------------
 func (I *Index) show() {
 	fmt.Printf(" %8s  OCC\n", "C")
 	for i := 0; i < len(I.SYMBOLS); i++ {
@@ -197,43 +186,16 @@ func Build (file string) *Index {
 }
 
 //-----------------------------------------------------------------------------
-func _load(thing interface{}, filename string) {
-	fin,err := os.Open(filename)
-	decOCC := gob.NewDecoder(fin)
-	err = decOCC.Decode(thing)
-	if err != nil {
-		log.Fatal("Load error:", filename, err)
-	}
-}
-
-//-----------------------------------------------------------------------------
-func _load_occ(filename string, Len int) []int {
-	thing := make([]int, Len)
-	fin,err := os.Open(filename)
-	decOCC := gob.NewDecoder(fin)
-	err = decOCC.Decode(&thing)
-	if err != nil {
-		log.Fatal("Error loading occ table:", filename, err)
-	}
-	return thing
-	// fmt.Println(thing[key], key)
-}
-
-//-----------------------------------------------------------------------------
 // Load FM index
 // Usage:  idx := Load(index_file)
-func Load (dir string) *Index {
+func Load (file string) *Index {
 	I := new(Index)
-	_load(&I.C, path.Join(dir, "c"))
-	_load(&I.SA, path.Join(dir, "sa"))
-	_load(&I.END_POS, path.Join(dir, "end_pos"))
-	_load(&I.SYMBOLS, path.Join(dir, "symbols"))
-	_load(&I.EP, path.Join(dir, "ep"))
-	_load(&I.LEN, path.Join(dir, "len"))
 
-	I.OCC = make(map[byte][]int)
-	for _,symb := range I.SYMBOLS {
-		I.OCC[byte(symb)] = _load_occ(path.Join(dir, "occ."+string(symb)), I.LEN)
+	finOCC,errOCC := os.Open(file)
+	decOCC := gob.NewDecoder(finOCC)
+	errOCC = decOCC.Decode(I)
+	if errOCC != nil {
+		log.Fatal("Load FM index; decode error:", errOCC)
 	}
 	return I
 }
@@ -245,44 +207,3 @@ func print_byte_array(a []byte) {
 	}
 	fmt.Println()
 }
-
-//-----------------------------------------------------------------------------
-/*func main() {
-	var build_file = flag.String("build", "", "Specify a file, from which to build FM index.")
-	var index_file = flag.String("i", "", "index file")
-	var queries_file = flag.String("q", "", "queries file")
-	var workers = flag.Int("w", 1, "number of workers")
-	flag.BoolVar(&Debug, "debug", false, "Turn on debug mode.")
-	flag.Parse()
-
-	if *build_file != "" {
-		idx := Build(*build_file)
-		idx.Save(*build_file)
-		// idx.show()
-		// print_byte_array(SEQ)
-		// print_byte_array(BWT)
-	} else if *index_file!="" && *queries_file!="" {
-		result := make(chan []int, 100000)
-		runtime.GOMAXPROCS(*workers)
-		idx := Load(*index_file)
-
-		// fmt.Print(idx)
-		f, err := os.Open(*queries_file)
-		if err != nil { panic("error opening file " + *queries_file) }
-		r := bufio.NewReader(f)
-		count := 0
-		for {
-			line, err := r.ReadBytes('\n')
-			if err != nil { break }
-			if len(line) > 1 {
-				line = line[0:len(line)-1]
-				go idx.Search(line, result)
-				count++
-			}
-		}
-		for i:=0; i<count; i++ {
-			fmt.Printf("%d\t%d\n", i+1, <- result)
-		}
-	}
-
-}*/
